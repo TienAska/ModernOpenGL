@@ -12,14 +12,10 @@
 #include <vector>
 #include <chrono>
 #include <numeric>
-#ifdef __GNUC__
-#include <experimental/filesystem>
-#else
 #include <filesystem>
-#endif
 
-#include <SDL.h>
-#include <glad/glad.h>
+#include <gl/gl3w.h>
+#include <GLFW/glfw3.h>
 #include <stb_image.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -27,10 +23,6 @@
 
 #ifdef _MSC_VER
 extern "C" { _declspec(dllexport) unsigned int NvOptimusEnablement = 0x00000001; }
-#endif
-
-#ifdef __GNUC__
-namespace std { namespace filesystem = experimental::filesystem; }
 #endif
 
 inline std::string read_text_file(std::string_view filepath)
@@ -124,7 +116,7 @@ void validate_program(GLuint shader, std::string_view filename)
 	if (compiled == GL_FALSE)
 	{
 		std::array<char, 1024> compiler_log;
-		glGetProgramInfoLog(shader, compiler_log.size(), nullptr, compiler_log.data());
+		glGetProgramInfoLog(shader, static_cast<GLsizei>(compiler_log.size()), nullptr, compiler_log.data());
 		glDeleteShader(shader);
 
 		std::ostringstream message;
@@ -275,7 +267,7 @@ GLuint create_framebuffer(std::vector<GLuint> const& cols, GLuint depth = GL_NON
 		draw_buffs[i] = GL_COLOR_ATTACHMENT0 + i;
 	}
 
-	glNamedFramebufferDrawBuffers(fbo, cols.size(), draw_buffs.data());
+	glNamedFramebufferDrawBuffers(fbo, static_cast<GLsizei>(cols.size()), draw_buffs.data());
 
 	if (depth != GL_NONE)
 	{
@@ -321,7 +313,7 @@ inline void delete_shader(GLuint pr, GLuint vs, GLuint fs)
 
 using glDeleterFunc = void (APIENTRYP)(GLuint item);
 using glDeleterFuncv = void (APIENTRYP)(GLsizei n, const GLuint *items);
-inline void delete_items(glDeleterFuncv deleter, std::initializer_list<GLuint> items) { deleter(items.size(), items.begin()); }
+inline void delete_items(glDeleterFuncv deleter, std::initializer_list<GLuint> items) { deleter(static_cast<GLsizei>(items.size()), items.begin()); }
 inline void delete_items(glDeleterFunc deleter, std::initializer_list<GLuint> items)
 {
 	for (size_t i = 0; i < items.size(); i++)
@@ -418,31 +410,43 @@ std::vector<glm::vec3> generate_ssao_noise()
 #if _DEBUG
 void APIENTRY gl_debug_callback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* userParam)
 {
-	std::ostringstream str;
-	str << "---------------------opengl-callback-start------------\n";
-	str << "message: " << message << '\n';
-	str << "type: ";
+	// ignore non-significant error/warning codes
+	if (id == 131169 || id == 131185 || id == 131218 || id == 131204) return;
+
+	std::cout << "---------------" << std::endl;
+	std::cout << "Debug message (" << id << "): " << message << std::endl;
+
+	switch (source)
+	{
+	case GL_DEBUG_SOURCE_API:             std::cout << "Source: API"; break;
+	case GL_DEBUG_SOURCE_WINDOW_SYSTEM:   std::cout << "Source: Window System"; break;
+	case GL_DEBUG_SOURCE_SHADER_COMPILER: std::cout << "Source: Shader Compiler"; break;
+	case GL_DEBUG_SOURCE_THIRD_PARTY:     std::cout << "Source: Third Party"; break;
+	case GL_DEBUG_SOURCE_APPLICATION:     std::cout << "Source: Application"; break;
+	case GL_DEBUG_SOURCE_OTHER:           std::cout << "Source: Other"; break;
+	} std::cout << std::endl;
+
 	switch (type)
 	{
-	case GL_DEBUG_TYPE_ERROR: str << "ERROR"; break;
-	case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR: str << "DEPRECATED_BEHAVIOR"; break;
-	case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR: str << "UNDEFINED_BEHAVIOR";	break;
-	case GL_DEBUG_TYPE_PORTABILITY: str << "PORTABILITY"; break;
-	case GL_DEBUG_TYPE_PERFORMANCE: str << "PERFORMANCE"; break;
-	case GL_DEBUG_TYPE_OTHER: str << "OTHER"; break;
-	}
-	str << '\n';
-	str << "id: " << id << '\n';
-	str << "severity: ";
+	case GL_DEBUG_TYPE_ERROR:               std::cout << "Type: Error"; break;
+	case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR: std::cout << "Type: Deprecated Behaviour"; break;
+	case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR:  std::cout << "Type: Undefined Behaviour"; break;
+	case GL_DEBUG_TYPE_PORTABILITY:         std::cout << "Type: Portability"; break;
+	case GL_DEBUG_TYPE_PERFORMANCE:         std::cout << "Type: Performance"; break;
+	case GL_DEBUG_TYPE_MARKER:              std::cout << "Type: Marker"; break;
+	case GL_DEBUG_TYPE_PUSH_GROUP:          std::cout << "Type: Push Group"; break;
+	case GL_DEBUG_TYPE_POP_GROUP:           std::cout << "Type: Pop Group"; break;
+	case GL_DEBUG_TYPE_OTHER:               std::cout << "Type: Other"; break;
+	} std::cout << std::endl;
+
 	switch (severity)
 	{
-	case GL_DEBUG_SEVERITY_LOW: str << "LOW"; break;
-	case GL_DEBUG_SEVERITY_MEDIUM: str << "MEDIUM";	break;
-	case GL_DEBUG_SEVERITY_HIGH: str << "HIGH";	break;
-	}
-	str << "\n---------------------opengl-callback-end--------------\n";
-
-	std::clog << str.str();
+	case GL_DEBUG_SEVERITY_HIGH:         std::cout << "Severity: high"; break;
+	case GL_DEBUG_SEVERITY_MEDIUM:       std::cout << "Severity: medium"; break;
+	case GL_DEBUG_SEVERITY_LOW:          std::cout << "Severity: low"; break;
+	case GL_DEBUG_SEVERITY_NOTIFICATION: std::cout << "Severity: notification"; break;
+	} std::cout << std::endl;
+	std::cout << std::endl;
 }
 #endif
 
@@ -455,14 +459,14 @@ std::string string_format(const std::string& format, Args ... args)
 	return std::string(buf.get(), buf.get() + size - 1); // We don't want the '\0' inside
 }
 
-void measure_frames(SDL_Window* const window, double& deltaTimeAverage, int& frameCounter, int framesToAverage)
+void measure_frames(GLFWwindow* const window, double& deltaTimeAverage, int& frameCounter, int framesToAverage)
 {
 	if (frameCounter == framesToAverage)
 	{
 		deltaTimeAverage /= framesToAverage;
 
 		auto window_title = string_format("frametime = %.3fms, fps = %.1f", 1000.0*deltaTimeAverage, 1.0/ deltaTimeAverage);
-		SDL_SetWindowTitle(window, window_title.c_str());
+		glfwSetWindowTitle(window, window_title.c_str());
 
 		deltaTimeAverage = 0.0;
 		frameCounter = 0;
@@ -493,34 +497,35 @@ int64_t now()
 	return std::chrono::duration_cast<T>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
 }
 
+static void error_callback(int error, const char* description)
+{
+	fprintf(stderr, "Error: %s\n", description);
+}
+
 int main(int argc, char* argv[])
 {
-	constexpr auto window_width = 1920;
-	constexpr auto window_height = 1080;
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_DEBUG_FLAG);
-	const auto window = SDL_CreateWindow("ModernOpenGL\0", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, window_width, window_height, SDL_WINDOW_OPENGL);
-	const auto gl_context = SDL_GL_CreateContext(window);
+	glfwSetErrorCallback(error_callback);
+	if (!glfwInit())
+		return 1;
+
+	constexpr auto window_width = 1280;
+	constexpr auto window_height = 800;
+	glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, true);
+	const auto window = glfwCreateWindow(window_width, window_height, "ModernOpenGL\0", NULL, NULL);
+	glfwMakeContextCurrent(window);
 	//SDL_GL_SetSwapInterval(0);
-	auto ev = SDL_Event();
 
-	auto key_count = 0;
-	const auto key_state = SDL_GetKeyboardState(&key_count);
-
-	std::array<bool, 512> key;
-	std::array<bool, 512> key_pressed;
-	std::array<bool, 512> key_released;
-
-	auto const[screen_width, screen_height] = []()
+	auto const[screen_width, screen_height] = [=]()
 	{
-		SDL_DisplayMode display_mode;
-		SDL_GetCurrentDisplayMode(0, &display_mode);
-		return std::pair<int, int>(display_mode.w, display_mode.h);
+		int display_w, display_h;
+		glfwGetFramebufferSize(window, &display_w, &display_h);
+		return std::pair<int, int>(display_w, display_h);
 	}();
 
-	if (!gladLoadGL())
+	if (gl3wInit())
 	{
-		SDL_GL_DeleteContext(gl_context);
-		SDL_DestroyWindow(window);
+		glfwDestroyWindow(window);
+		glfwTerminate();
 		throw std::runtime_error("failed to load gl");
 	}
 
@@ -666,7 +671,7 @@ int main(int argc, char* argv[])
 	auto const camera_projection = glm::perspective(fov, float(window_width) / float(window_height), 0.1f, 1000.0f);
 	set_uniform(vert_shader_g, uniform_projection, camera_projection);
 
-	auto t1 = SDL_GetTicks() / 1000.0;
+	auto t1 = glfwGetTime();
 
 	const auto framesToAverage = 10;
 	auto deltaTimeAverage = 0.0;  // first moment
@@ -683,9 +688,9 @@ int main(int argc, char* argv[])
 
 	auto curr_time = now();
 	auto frames = int64_t(0);
-	while (ev.type != SDL_QUIT)
+	while (!glfwWindowShouldClose(window))
 	{
-		const auto t2 = SDL_GetTicks() / 1000.0;
+		const auto t2 = glfwGetTime();
 		const auto dt = t2 - t1;
 		t1 = t2;
 
@@ -694,15 +699,8 @@ int main(int argc, char* argv[])
 
 		measure_frames(window, deltaTimeAverage, frameCounter, framesToAverage);
 
-		if (SDL_PollEvent(&ev))
-		{
-			for (int i = 0; i < key_count; i++)
-			{
-				key_pressed[i] = !key[i] && key_state[i];
-				key_released[i] = key[i] && !key_state[i];
-				key[i] = bool(key_state[i]);
-			}
-		}
+		glfwPollEvents();
+
 		static auto rot_x = 0.0f;
 		static auto rot_y = 0.0f;
 		static glm::vec3 camera_position = glm::vec3(0.0f, 0.0f, -7.0f);
@@ -711,24 +709,24 @@ int main(int argc, char* argv[])
 		auto const camera_up = camera_orientation * glm::vec3(0.0f, 1.0f, 0.0f);
 		auto const camera_right = camera_orientation * glm::vec3(1.0f, 0.0f, 0.0f);
 
-		if (key[SDL_SCANCODE_ESCAPE])
-			ev.type = SDL_QUIT;
+		if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+			glfwSetWindowShouldClose(window, GLFW_TRUE);
 
-		if (key[SDL_SCANCODE_LEFT])		rot_y += 0.025f;
-		if (key[SDL_SCANCODE_RIGHT])	rot_y -= 0.025f;
-		if (key[SDL_SCANCODE_UP])		rot_x -= 0.025f;
-		if (key[SDL_SCANCODE_DOWN])		rot_x += 0.025f;
+		if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS)	rot_y += 0.025f;
+		if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS)	rot_y -= 0.025f;
+		if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS)		rot_x -= 0.025f;
+		if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)	rot_x += 0.025f;
 
 		camera_orientation = glm::quat(glm::vec3(rot_x, rot_y, 0.0f));
 
-		if (key[SDL_SCANCODE_W]) camera_position += camera_forward * 0.1f;
-		if (key[SDL_SCANCODE_A]) camera_position += camera_right * 0.1f;
-		if (key[SDL_SCANCODE_S]) camera_position -= camera_forward * 0.1f;
-		if (key[SDL_SCANCODE_D]) camera_position -= camera_right * 0.1f;
+		if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera_position += camera_forward * 0.1f;
+		if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camera_position += camera_right * 0.1f;
+		if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera_position -= camera_forward * 0.1f;
+		if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) camera_position -= camera_right * 0.1f;
 
 		static float cube_speed = 1.0f;
-		if (key[SDL_SCANCODE_Q]) cube_speed -= 0.01f;
-		if (key[SDL_SCANCODE_E]) cube_speed += 0.01f;
+		if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) cube_speed -= 0.01f;
+		if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) cube_speed += 0.01f;
 
 		auto const camera_view = glm::lookAt(camera_position, camera_position + camera_forward, camera_up);
 		
@@ -791,8 +789,8 @@ int main(int argc, char* argv[])
 			{
 				switch (object.shape)
 				{
-				case shape_t::cube: glDrawElements(GL_TRIANGLES, indices_cube.size(), GL_UNSIGNED_BYTE, nullptr); break;
-				case shape_t::quad: glDrawElements(GL_TRIANGLES, indices_quad.size(), GL_UNSIGNED_BYTE, nullptr); break;
+				case shape_t::cube: glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(indices_cube.size()), GL_UNSIGNED_BYTE, nullptr); break;
+				case shape_t::quad: glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(indices_quad.size()), GL_UNSIGNED_BYTE, nullptr); break;
 				}
 			}
 		}
@@ -849,7 +847,7 @@ int main(int argc, char* argv[])
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		glBlitNamedFramebuffer(fb_blur, 0, 0, 0, viewport_width, viewport_height, 0, 0, window_width, window_height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
-		SDL_GL_SwapWindow(window);
+		glfwSwapBuffers(window);
 	}
 
 	delete_items(glDeleteBuffers,
@@ -889,7 +887,7 @@ int main(int argc, char* argv[])
 	delete_items(glDeleteVertexArrays, { vao_cube, vao_empty });
 	delete_items(glDeleteFramebuffers, { fb_gbuffer, fb_finalcolor, fb_blur });
 
-	SDL_GL_DeleteContext(gl_context);
-	SDL_DestroyWindow(window);
+	glfwDestroyWindow(window);
+	glfwTerminate();
 	return 0;
 }
